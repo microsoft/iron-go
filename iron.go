@@ -1,15 +1,22 @@
 package iron
 
 import (
+	"bytes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"hash"
 	"time"
 
 	"golang.org/x/crypto/pbkdf2"
 )
+
+// Padding symbol used by Iron. This will be added when encrypting and trimmed
+// out when decrypting.
+const padder = '\t'
 
 // An Integrity struct is contained in the Options struct and describes
 // configuration for cookie integrity verification.
@@ -80,10 +87,10 @@ func (o Options) fillDefaults() Options {
 
 	if o.Encryption == nil {
 		o.Encryption = &Encryption{
-			IVBits:     128,
+			IVBits:     16,
 			KeyBits:    256,
 			Iterations: 1,
-			SaltBits:   256,
+			SaltBits:   32,
 			Cipher:     AES256,
 		}
 	}
@@ -93,7 +100,7 @@ func (o Options) fillDefaults() Options {
 			Hash:       sha256.New,
 			KeyBits:    256,
 			Iterations: 1,
-			SaltBits:   256,
+			SaltBits:   32,
 		}
 	}
 
@@ -106,11 +113,6 @@ func New(options Options) *Vault { return &Vault{options.fillDefaults()} }
 // Vault is a structure capable is sealing and unsealing Iron cookies.
 type Vault struct{ opts Options }
 
-var (
-	macFormatVersion  = "2"
-	expectedMacPrefix = "Fe26." + macFormatVersion
-)
-
 func (v *Vault) generateKey(keybits uint, iterations uint, salt []byte) []byte {
 	return pbkdf2.Key(v.opts.Secret, salt, int(iterations), int(keybits/8), sha1.New)
 }
@@ -120,15 +122,14 @@ type hmacResult struct {
 	Salt   []byte
 }
 
-func (v *Vault) hmacWithPassword(salt []byte, data string) (out hmacResult, err error) {
+func (v *Vault) hmacWithPassword(salt []byte, data string) (digest []byte, err error) {
 	key := v.generateKey(v.opts.Integrity.KeyBits, v.opts.Integrity.Iterations, salt)
 	h := hmac.New(v.opts.Integrity.Hash, key)
 	if _, err := h.Write([]byte(data)); err != nil {
-		return out, err
+		return nil, err
 	}
 
-	out.Digest = h.Sum(nil)
-	return out, nil
+	return h.Sum(nil), nil
 }
 
 func (v *Vault) decrypt(msg *message) ([]byte, error) {
@@ -140,7 +141,53 @@ func (v *Vault) decrypt(msg *message) ([]byte, error) {
 
 	data := make([]byte, len(msg.EncryptedBody))
 	decrypt.CryptBlocks(data, msg.EncryptedBody)
-	return data, nil
+	return bytes.TrimRight(data, string(padder)), nil
+}
+
+func (v *Vault) generateSalt(size uint) ([]byte, error) {
+	rawSalt, err := randBits(v.opts.Encryption.SaltBits)
+	if err != nil {
+		return nil, err
+	}
+	salt := make([]byte, base64.RawURLEncoding.EncodedLen(len(rawSalt)))
+	base64.RawURLEncoding.Encode(salt, rawSalt)
+	return salt, nil
+}
+
+func (v *Vault) encryptBlocks(block cipher.BlockMode, b []byte) []byte {
+	size := block.BlockSize()
+	b = append(b, bytes.Repeat([]byte{padder}, size-len(b)%size)...)
+	out := make([]byte, len(b))
+
+	for i := 0; i < len(b); i += size {
+		block.CryptBlocks(out[i:i+size], b[i:i+size])
+	}
+
+	return out
+}
+
+func (v *Vault) encrypt(b []byte) (*message, error) {
+	salt, err := v.generateSalt(v.opts.Encryption.SaltBits)
+	if err != nil {
+		return nil, err
+	}
+
+	key := v.generateKey(v.opts.Encryption.KeyBits, v.opts.Encryption.Iterations, salt)
+	iv, err := randBits(v.opts.Encryption.IVBits)
+	if err != nil {
+		return nil, err
+	}
+
+	encrypt, _, err := v.opts.Encryption.Cipher(key, iv)
+	if err != nil {
+		return nil, err
+	}
+
+	return &message{
+		EncryptedBody: v.encryptBlocks(encrypt, b),
+		IV:            iv,
+		Salt:          salt,
+	}, nil
 }
 
 // Unseal attempts to extract the encrypted information from the message.
@@ -155,8 +202,8 @@ func (v *Vault) Unseal(str string) ([]byte, error) {
 	// 1. Check expiration
 
 	if !msg.Expiration.IsZero() {
-		delta := time.Now().Add(v.opts.LocalTimeOffset).Sub(msg.Expiration)
-		if delta > v.opts.TimestampSkew || delta < v.opts.TimestampSkew {
+		delta := msg.Expiration.Sub(time.Now().Add(v.opts.LocalTimeOffset))
+		if delta < -v.opts.TimestampSkew {
 			return nil, UnsealError{"Expired or invalid seal"}
 		}
 	}
@@ -164,18 +211,46 @@ func (v *Vault) Unseal(str string) ([]byte, error) {
 	// 2. Run the MAC digest against the message excluding our additional
 	// salt and hmac
 
-	mac, err := v.hmacWithPassword(msg.HMACSalt, msg.Base())
+	digest, err := v.hmacWithPassword(msg.HMACSalt, msg.Base())
 	if err != nil {
 		return nil, err
 	}
 
 	// 3. Check the HMAC
 
-	if subtle.ConstantTimeCompare(mac.Digest, msg.HMAC) == 0 {
+	if subtle.ConstantTimeCompare(digest, msg.HMAC) == 0 {
 		return nil, UnsealError{"Bad hmac value"}
 	}
 
 	// 4. Decrypt!
 
 	return v.decrypt(msg)
+}
+
+// Seal encrypts and signs the byte slice into an Iron cookie.
+func (v *Vault) Seal(b []byte) (string, error) {
+
+	// 1. Encrypt the payload
+
+	msg, err := v.encrypt(b)
+	if err != nil {
+		return "", err
+	}
+	if v.opts.TTL > 0 {
+		msg.Expiration = time.Now().Add(v.opts.TTL)
+	}
+
+	// 2. Generate an HMAC signature
+
+	hmacSalt, err := v.generateSalt(v.opts.Integrity.SaltBits)
+	if err != nil {
+		return "", err
+	}
+	digest, err := v.hmacWithPassword(hmacSalt, msg.Base())
+
+	// 3. Generate the packed result
+
+	msg.HMACSalt = hmacSalt
+	msg.HMAC = digest
+	return msg.Pack(), nil
 }

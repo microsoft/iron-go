@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+var (
+	macFormatVersion = "2"
+	macPrefix        = "Fe26." + macFormatVersion
+	delimiter        = "*"
+)
+
 type message struct {
 	base string // this is the cookie message excluding the hmac and salt
 
@@ -22,11 +28,11 @@ type message struct {
 // Unpack attempts to populate the message by unmarshaling the provided string.
 // It returns an UnsealError if the string isn't valid.
 func (m *message) Unpack(s string) error {
-	parts := strings.Split(s, "*")
+	parts := strings.Split(s, delimiter)
 	if len(parts) != 8 {
 		return UnsealError{"Incorrect number of sealed components"}
 	}
-	if parts[0] != expectedMacPrefix {
+	if parts[0] != macPrefix {
 		return UnsealError{"Wrong mac prefix"}
 	}
 	if len(parts[5]) > 0 {
@@ -34,13 +40,13 @@ func (m *message) Unpack(s string) error {
 		if err != nil {
 			return UnsealError{"Invalid expiration time"}
 		}
-		m.Expiration = time.Unix(0, exp)
+		m.Expiration = time.Unix(0, exp*int64(time.Millisecond))
 	}
 
 	errs := []error{
-		basee64decodeInto(&m.IV, parts[3]),
-		basee64decodeInto(&m.EncryptedBody, parts[4]),
-		basee64decodeInto(&m.HMAC, parts[7]),
+		base64decodeInto(&m.IV, parts[3]),
+		base64decodeInto(&m.EncryptedBody, parts[4]),
+		base64decodeInto(&m.HMAC, parts[7]),
 	}
 
 	for _, err := range errs {
@@ -55,6 +61,15 @@ func (m *message) Unpack(s string) error {
 	return nil
 }
 
+// Pack serializes the message into a cookie string.
+func (m *message) Pack() string {
+	return strings.Join([]string{
+		m.Base(),
+		string(m.HMACSalt),
+		base64.RawURLEncoding.EncodeToString(m.HMAC),
+	}, delimiter)
+}
+
 // Base returns the MAC base string, which is the cookie excluding the
 // salt and hmac components.
 func (m *message) Base() string {
@@ -62,12 +77,26 @@ func (m *message) Base() string {
 		return m.base
 	}
 
-	panic("base string not set")
+	parts := []string{
+		macPrefix,
+		"", // todo: password rotation component
+		string(m.Salt),
+		base64.RawURLEncoding.EncodeToString(m.IV),
+		base64.RawURLEncoding.EncodeToString(m.EncryptedBody),
+		"",
+	}
+
+	if !m.Expiration.IsZero() {
+		parts[5] = strconv.FormatInt(m.Expiration.UnixNano()/int64(time.Millisecond), 10)
+	}
+
+	m.base = strings.Join(parts, delimiter)
+	return m.base
 }
 
-// basee64decodeInto attempts to base64 decode the source string into the
+// base64decodeInto attempts to base64 decode the source string into the
 // target address. It returns an error if the source is invalid.
-func basee64decodeInto(target *[]byte, src string) error {
+func base64decodeInto(target *[]byte, src string) error {
 	res, err := base64.RawURLEncoding.DecodeString(src)
 	*target = res
 	return err

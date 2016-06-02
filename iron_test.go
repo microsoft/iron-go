@@ -3,12 +3,14 @@ package iron
 import (
 	"encoding/base64"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
 var (
 	password = []byte(`some_not_random_password_that_is_also_long_enough`)
+	source   = []byte(`{"a":1,"b":2,"c":[3,4,5],"d":{"e":"f"}}`)
 	salt     = []byte(`e4fe33b6dc4c7ef5ad7907f015deb7b03723b03a54764aceeb2ab1235cc8dce3`)
 )
 
@@ -42,12 +44,65 @@ var (
     SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+func TestPanicsOnShortPassword(t *testing.T) {
+	assert.Panics(t, func() {
+		New(Options{Secret: []byte(`hi`)})
+	})
+}
+
+func TestSealsAndParses(t *testing.T) {
+	v := New(Options{Secret: password})
+
+	cookie, err := v.Seal(source)
+	assert.Nil(t, err)
+	payload, err := v.Unseal(cookie)
+	assert.Nil(t, err)
+	assert.Equal(t, source, payload)
+}
+
+func TestSealsWithExpiration(t *testing.T) {
+	v := New(Options{Secret: password, TTL: time.Hour})
+
+	cookie, err := v.Seal(source)
+	assert.Nil(t, err)
+	payload, err := v.Unseal(cookie)
+	assert.Nil(t, err)
+	assert.Equal(t, source, payload)
+
+	v2 := New(Options{Secret: password, TTL: time.Hour, LocalTimeOffset: time.Hour * 2})
+	_, err = v2.Unseal(cookie)
+	assert.Equal(t, UnsealError{"Expired or invalid seal"}, err)
+}
+
+func TestSealsWithExpirationAndTimeShift(t *testing.T) {
+	v := New(Options{Secret: password, TTL: time.Hour})
+
+	cookie, err := v.Seal(source)
+	assert.Nil(t, err)
+	payload, err := v.Unseal(cookie)
+	assert.Nil(t, err)
+	assert.Equal(t, source, payload)
+
+	v2 := New(Options{
+		Secret: password, TTL: time.Hour,
+		LocalTimeOffset: time.Hour + 40*time.Second,
+		TimestampSkew:   60 * time.Second,
+	})
+
+	_, err = v2.Unseal(cookie)
+	assert.Nil(t, err)
+
+	v2.opts.LocalTimeOffset = time.Hour + 61*time.Second
+
+	_, err = v2.Unseal(cookie)
+	assert.Equal(t, UnsealError{"Expired or invalid seal"}, err)
+}
+
 func TestUnsealsTicket(t *testing.T) {
 	v := New(Options{Secret: password})
 	payload, err := v.Unseal("Fe26.2**0cdd607945dd1dffb7da0b0bf5f1a7daa6218cbae14cac51dcbd91fb077aeb5b*aOZLCKLhCt0D5IU1qLTtYw*g0ilNDlQ3TsdFUqJCqAm9iL7Wa60H7eYcHL_5oP136TOJREkS3BzheDC1dlxz5oJ**05b8943049af490e913bbc3a2485bee2aaf7b823f4c41d0ff0b7c168371a3772*R8yscVdTBRMdsoVbdDiFmUL8zb-c3PQLGJn4Y8C-AqI")
 	assert.Nil(t, err)
-	// all those tabs are in Iron's tests for some reason. I'll just leave them :P
-	assert.Equal(t, "{\"a\":1,\"b\":2,\"c\":[3,4,5],\"d\":{\"e\":\"f\"}}\t\t\t\t\t\t\t\t\t", string(payload))
+	assert.Equal(t, "{\"a\":1,\"b\":2,\"c\":[3,4,5],\"d\":{\"e\":\"f\"}}", string(payload))
 }
 
 func TestReturnsErrWithWrongUnseals(t *testing.T) {
@@ -82,8 +137,8 @@ func TestReturnsErrOnExpired(t *testing.T) {
 	assert.Nil(t, err)
 
 	_, err = v.Unseal(base + "*" +
-		base64.RawURLEncoding.EncodeToString(mac.Salt) + "*" +
-		base64.RawURLEncoding.EncodeToString(mac.Digest))
+		base64.RawURLEncoding.EncodeToString(salt) + "*" +
+		base64.RawURLEncoding.EncodeToString(mac))
 
 	assert.Equal(t, UnsealError{"Expired or invalid seal"}, err)
 }
