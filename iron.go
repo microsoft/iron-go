@@ -3,10 +3,8 @@ package iron
 import (
 	"crypto/hmac"
 	"crypto/sha1"
-	"crypto/sha512"
+	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/base64"
-	"fmt"
 	"hash"
 	"time"
 
@@ -92,7 +90,7 @@ func (o Options) fillDefaults() Options {
 
 	if o.Integrity == nil {
 		o.Integrity = &Integrity{
-			Hash:       sha512.New,
+			Hash:       sha256.New,
 			KeyBits:    256,
 			Iterations: 1,
 			SaltBits:   256,
@@ -118,7 +116,7 @@ func (v *Vault) generateKey(keybits uint, iterations uint, salt []byte) []byte {
 }
 
 type hmacResult struct {
-	Digest string
+	Digest []byte
 	Salt   []byte
 }
 
@@ -129,7 +127,7 @@ func (v *Vault) hmacWithPassword(salt []byte, data string) (out hmacResult, err 
 		return out, err
 	}
 
-	out.Digest = base64.RawURLEncoding.EncodeToString(h.Sum(nil))
+	out.Digest = h.Sum(nil)
 	return out, nil
 }
 
@@ -172,8 +170,8 @@ func (v *Vault) Unseal(str string) ([]byte, error) {
 	}
 
 	// 3. Check the HMAC
-	fmt.Printf("%+v / %+v", mac.Digest, msg.HMAC)
-	if subtle.ConstantTimeCompare([]byte(mac.Digest), []byte(msg.HMAC)) == 0 {
+
+	if subtle.ConstantTimeCompare(mac.Digest, msg.HMAC) == 0 {
 		return nil, UnsealError{"Bad hmac value"}
 	}
 

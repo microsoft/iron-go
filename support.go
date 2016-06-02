@@ -16,7 +16,7 @@ type message struct {
 	EncryptedBody []byte
 	Expiration    time.Time
 	HMACSalt      []byte
-	HMAC          string
+	HMAC          []byte
 }
 
 // Unpack attempts to populate the message by unmarshaling the provided string.
@@ -40,11 +40,8 @@ func (m *message) Unpack(s string) error {
 	errs := []error{
 		basee64decodeInto(&m.IV, parts[3]),
 		basee64decodeInto(&m.EncryptedBody, parts[4]),
-		// basee64decodeInto(&m.HMACSalt, parts[6]),
-		// basee64decodeInto(&m.HMAC, parts[7]),
+		basee64decodeInto(&m.HMAC, parts[7]),
 	}
-	m.HMACSalt = []byte(parts[6])
-	m.HMAC = parts[7]
 
 	for _, err := range errs {
 		if err != nil {
@@ -53,6 +50,7 @@ func (m *message) Unpack(s string) error {
 	}
 
 	m.Salt = []byte(parts[2])
+	m.HMACSalt = []byte(parts[6])
 	m.base = s[0 : len(s)-len(parts[7])-1-len(parts[6])-1]
 	return nil
 }

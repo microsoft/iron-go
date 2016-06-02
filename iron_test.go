@@ -1,6 +1,7 @@
 package iron
 
 import (
+	"encoding/base64"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -73,16 +74,16 @@ func TestReturnsErrOnBase64Fail(t *testing.T) {
 	assert.Equal(t, UnsealError{"Invalid component encoding"}, err)
 }
 
-// func TestReturnsErrOnExpired(t *testing.T) {
-// 	v := New(Options{Secret: password})
+func TestReturnsErrOnExpired(t *testing.T) {
+	v := New(Options{Secret: password})
 
-// 	base := "Fe26.2**a38dc7a7bf2f8ff650b103d8c669d76ad219527fbfff3d98e3b30bbecbe9bd3b*nTsatb7AQE1t0uMXDx-2aw*uIO5bRFTwEBlPC1Nd_hfSkZfqxkxuY1EO2Be_jJPNQCqFNumRBjQAl8WIKBW1beF*1380495854060"
-// 	mac, err := v.hmacWithPassword(salt, base)
-// 	assert.Nil(t, err)
+	base := "Fe26.2**a38dc7a7bf2f8ff650b103d8c669d76ad219527fbfff3d98e3b30bbecbe9bd3b*nTsatb7AQE1t0uMXDx-2aw*uIO5bRFTwEBlPC1Nd_hfSkZfqxkxuY1EO2Be_jJPNQCqFNumRBjQAl8WIKBW1beF*1380495854060"
+	mac, err := v.hmacWithPassword(salt, base)
+	assert.Nil(t, err)
 
-// 	_, err = v.Unseal(base + "*" +
-// 		base64.RawURLEncoding.EncodeToString(mac.Salt) + "*" +
-// 		base64.RawURLEncoding.EncodeToString(mac.Digest))
+	_, err = v.Unseal(base + "*" +
+		base64.RawURLEncoding.EncodeToString(mac.Salt) + "*" +
+		base64.RawURLEncoding.EncodeToString(mac.Digest))
 
-// 	assert.Equal(t, UnsealError{"Expired or invalid seal"}, err)
-// }
+	assert.Equal(t, UnsealError{"Expired or invalid seal"}, err)
+}
