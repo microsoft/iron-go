@@ -247,6 +247,9 @@ func (v *Vault) Seal(b []byte) (string, error) {
 		return "", err
 	}
 	digest, err := v.hmacWithPassword(hmacSalt, msg.Base())
+	if err != nil {
+		return "", err
+	}
 
 	// 3. Generate the packed result
 
