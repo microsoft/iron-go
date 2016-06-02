@@ -3,7 +3,6 @@ package iron
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"hash"
 )
 
 // CipherFactory is a function that takes a key and iv and returns and
@@ -21,10 +20,3 @@ var (
 		return cipher.NewCBCEncrypter(block, iv), cipher.NewCBCDecrypter(block, iv), nil
 	})
 )
-
-type Algorithm struct {
-	Keybits uint
-	IVBits  uint
-	Hash    func() hash.Hash
-	Cipher  CipherFactory
-}
