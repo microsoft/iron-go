@@ -17,3 +17,36 @@ payload, err := v.Unseal(cookie)
 
 // Use your data!
 ```
+### CLI
+
+iron-go includes a simple CLI to seal and unseal cookies. Install via:
+
+```
+go install github.com/WatchBeam/iron-go/cmd/iron
+```
+
+Usage example:
+
+```
+➜  iron-go git:(master) iron --help
+usage: iron --secret=SECRET [<flags>] <command> [<args> ...]
+
+Flags:
+      --help           Show context-sensitive help (also try --help-long and --help-man).
+  -s, --secret=SECRET  Cookie encryption password
+  -v, --value=VALUE    Cookie contents. If not provided, reads from stdin.
+
+Commands:
+  help [<command>...]
+    Show help.
+
+  seal
+    Encrypts the cookie
+
+  unseal
+    Decrypts the cookie
+
+
+➜  iron-go git:(master) pbpaste | iron unseal --secret=somethingatleast32characterslong
+{"hello":"world!"}
+```
